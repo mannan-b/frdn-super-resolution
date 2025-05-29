@@ -3,6 +3,7 @@
 
 import torch
 import torch.nn as nn
+from hat_arch import CAB
 
 class RDB_Conv(nn.Module):
     def __init__(self, inChannels, growRate, kSize=3):
@@ -18,23 +19,35 @@ class RDB_Conv(nn.Module):
         out = self.conv(x)
         return torch.cat((x, out), 1)
 
+from hat_arch import CAB  # Add this import
+
 class RDB(nn.Module):
-    def __init__(self, growRate0, growRate, nConvLayers, kSize=3):
+    def __init__(self, in_channels, growth_rate, num_layers):
         super(RDB, self).__init__()
-        G0 = growRate0
-        G  = growRate
-        C  = nConvLayers
-        
-        convs = []
-        for c in range(C):
-            convs.append(RDB_Conv(G0 + c*G, G))
-        self.convs = nn.Sequential(*convs)
-        
-        # Local Feature Fusion
-        self.LFF = nn.Conv2d(G0 + C*G, G0, 1, padding=0, stride=1)
+        self.layers = nn.ModuleList()
+        self.growth_rate = growth_rate
+        self.in_channels = in_channels
+
+        channels = in_channels
+        for i in range(num_layers):
+            self.layers.append(nn.Sequential(
+                nn.Conv2d(channels, growth_rate, kernel_size=3, padding=1),
+                nn.ReLU(inplace=True)
+            ))
+            channels += growth_rate
+
+        self.lff = nn.Conv2d(channels, in_channels, kernel_size=1)
+        self.cab = CAB(in_channels)  # Add channel attention here
 
     def forward(self, x):
-        return self.LFF(self.convs(x)) + x
+        features = [x]
+        for layer in self.layers:
+            out = layer(torch.cat(features, 1))
+            features.append(out)
+
+        fused = self.lff(torch.cat(features, 1))
+        out = fused + x  # local residual
+        return self.cab(out)
 
 class RDN(nn.Module):
     def __init__(self, in_channels, out_channels, num_features, num_blocks, num_layers, upscale_factor):
